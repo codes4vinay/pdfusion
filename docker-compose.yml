@@ -10,29 +10,41 @@ services:
 
   valkey:
     image: valkey/valkey:latest
+    restart: always
     volumes:
-      - valkey_data:/usr/local/etc/valkey
+      - valkey_data:/data
 
   app:
     build:
       dockerfile: Dockerfile
       context: .
+    restart: always
     env_file:
       - ./.env
+    depends_on:
+      - mongo
+      - valkey
+    volumes:
+      - uploads_data:/mnt/uploads
     ports:
       - 8000:8000
 
   worker:
     command:
-      ["/bin/sh", "-c", "rq worker --with-scheduler --url redis://valkey:6379"]
+      ["/bin/sh", "-c", "rq worker --with-scheduler --url redis://valkey:6379 default"]
     build:
       dockerfile: Dockerfile
       context: .
+    restart: always
     env_file:
       - ./.env
-    ports:
-      - 8001:8000
+    depends_on:
+      - mongo
+      - valkey
+    volumes:
+      - uploads_data:/mnt/uploads
 
 volumes:
   mongodb_data:
   valkey_data:
+  uploads_data:

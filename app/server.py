@@ -34,7 +34,7 @@ async def upload_file(file: UploadFile):
         )
     )
     file_path = f"/mnt/uploads/{str(db_file.inserted_id)}/{file.filename}"
-    # mounting storage in production(HDD, SSD, etc.)
+    # mounting storage in production
     await save_to_disk(file=await file.read(), path=file_path)
 
     # Push to Queue

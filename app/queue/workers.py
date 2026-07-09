@@ -1,16 +1,14 @@
-# rq worker --with-scheduler --url redis://valkey:6379
-# for starting the worker
+import asyncio
+import base64
+import os
+
 from ..db.collections.files import files_collection
 from bson import ObjectId
 from pdf2image import convert_from_path
-import os
-import base64
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-
-client = OpenAI()
 
 
 def encode_image(image_path):
@@ -18,54 +16,81 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-async def process_file(id: str, file_path: str):
-    await files_collection.update_one({"_id": ObjectId(id)}, {
-        "$set": {
-            "status": "processing"
-        }
-    })
+def process_file(id: str, file_path: str):
+    asyncio.run(process_file_async(id, file_path))
 
-    # Step-1: Convert PDF to image
-    pages = convert_from_path(file_path)
-    images = []
 
-    for i, page in enumerate(pages):
-        image_save_path = f"/mnt/uploads/images/{id}/image-{i}.jpg"
-        os.makedirs(os.path.dirname(image_save_path), exist_ok=True)
-        page.save(image_save_path, 'JPEG')
-        images.append(image_save_path)
+async def process_file_async(id: str, file_path: str):
+    object_id = ObjectId(id)
 
-    await files_collection.update_one({"_id": ObjectId(id)}, {
-        "$set": {
-            "status": "Image conversion succeeded."
-        }
-    })
+    try:
+        await files_collection.update_one({"_id": object_id}, {
+            "$set": {
+                "status": "processing"
+            }
+        })
 
-    images_base64 = [encode_image(img) for img in images]
+        # Step-1: Convert PDF to images
+        pages = convert_from_path(file_path)
+        images = []
 
-    result = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=[
+        for i, page in enumerate(pages):
+            image_save_path = f"/mnt/uploads/images/{id}/image-{i}.jpg"
+            os.makedirs(os.path.dirname(image_save_path), exist_ok=True)
+            page.save(image_save_path, 'JPEG')
+            images.append(image_save_path)
+
+        await files_collection.update_one({"_id": object_id}, {
+            "$set": {
+                "status": "image_conversion_succeeded"
+            }
+        })
+
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key or api_key.startswith("placeholder_"):
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+
+        client = OpenAI(api_key=api_key)
+        images_base64 = [encode_image(img) for img in images]
+        content = [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Based on the resume below, Roast this resume"
-                    },
-                    {
-                        "type": "image_url",
-                        # flake8: noqa
-                        "image_url": {"url": f"data:image/jpeg;base64,{images_base64}"}
-                    }
-                ]
+                "type": "text",
+                "text": (
+                    "Analyze this PDF document. Summarize the content, extract key "
+                    "points, and call out important details from every page."
+                )
             }
         ]
-    )
 
-    await files_collection.update_one({"_id": ObjectId(id)}, {
-        "$set": {
-            "status": "processed",
-            "result": result.choices[0].message.content
-        }
-    })
+        for image_base64 in images_base64:
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_base64}"
+                }
+            })
+
+        result = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ]
+        )
+
+        await files_collection.update_one({"_id": object_id}, {
+            "$set": {
+                "status": "processed",
+                "result": result.choices[0].message.content
+            }
+        })
+    except Exception as exc:
+        await files_collection.update_one({"_id": object_id}, {
+            "$set": {
+                "status": "failed",
+                "result": str(exc)
+            }
+        })
+        raise

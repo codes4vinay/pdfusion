@@ -1,13 +1,16 @@
-FROM python:latest
+FROM python:3.12-slim
 
-RUN apt-get update
-RUN apt-get install -y poppler-utils
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY requirements.txt requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY app/ /app/app/
 
-RUN pip install -r requirements.txt
-
-CMD ["/bin/sh", "-c", "python -m app.main" ]
+CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8000"]
